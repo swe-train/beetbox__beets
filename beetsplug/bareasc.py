@@ -22,7 +22,9 @@
 from beets import ui
 from beets.ui import print_, decargs
 from beets.plugins import BeetsPlugin
+from beets.dbcore.database import add_db_function
 from beets.dbcore.query import StringFieldQuery
+
 from unidecode import unidecode
 
 
@@ -41,6 +43,11 @@ class BareascQuery(StringFieldQuery):
         pattern = unidecode(pattern)
         val = unidecode(val)
         return pattern in val
+
+    @staticmethod
+    @add_db_function(name="unidecode")
+    def _unidecode(value):
+        return unidecode(value)
 
     def col_clause(self):
         """Compare ascii version of the pattern."""

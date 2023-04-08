@@ -22,6 +22,8 @@ from datetime import datetime, timedelta
 import unicodedata
 from functools import reduce
 
+from .database import add_db_function
+
 
 class ParsingError(ValueError):
     """Abstract class for any unparseable user-requested album/query
@@ -230,6 +232,13 @@ class RegexpQuery(StringFieldQuery):
             raise InvalidQueryArgumentValueError(pattern,
                                                  "a regular expression",
                                                  format(exc))
+
+    @staticmethod
+    @add_db_function()
+    def regexp(value, pattern) -> bool:
+        if isinstance(value, bytes):
+            value = value.decode()
+        return re.search(pattern, str(value)) is not None
 
     def col_clause(self):
         return f" regexp({self.field}, ?)", [self.pattern.pattern]
