@@ -346,6 +346,7 @@ class DummyIO:
         return self.stdin.reads
 
     def install(self):
+        assert not self.installed, "DummyIO already installed"
         self.installed = True
 
         self.orig_stdin = sys.stdin
