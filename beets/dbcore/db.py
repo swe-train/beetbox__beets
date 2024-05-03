@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import sqlite3
@@ -25,6 +26,7 @@ import threading
 import time
 from abc import ABC
 from collections import defaultdict
+from pathlib import Path
 from sqlite3 import Connection
 from types import TracebackType
 from typing import (
@@ -67,6 +69,9 @@ from .query import (
     Sort,
     TrueQuery,
 )
+
+# convert data under 'json_str' type name to Python dictionary automatically
+sqlite3.register_converter("json_str", json.loads)
 
 DEBUG = bool(os.getenv("BEETS_DEBUG", False))
 
@@ -350,6 +355,22 @@ class Model(ABC):
         This is intended to be used as a FROM clause in the SQL query.
         """
         return ""
+
+    @cached_classproperty
+    def table_with_flex_attrs(cls) -> str:
+        return f"""(
+            SELECT
+                *,
+                REPLACE(json_group_object(key, value), '{{:null}}', '{{}}') AS "flex_attrs [json_str]"
+            FROM {cls._table} LEFT JOIN (
+                SELECT
+                    entity_id,
+                    key,
+                    CAST(value AS text) AS value
+                FROM {cls._flex_table}) ON entity_id == {cls._table}.id
+            GROUP BY {cls._table}.id
+        ) {cls._table}
+        """
 
     @classmethod
     def _getters(cls: Type["Model"]):
@@ -771,7 +792,6 @@ class Results(Generic[AnyModel]):
         model_class: Type[AnyModel],
         rows: List[Mapping],
         db: "Database",
-        flex_rows,
         query: Optional[Query] = None,
         sort=None,
     ):
@@ -794,7 +814,6 @@ class Results(Generic[AnyModel]):
         self.db = db
         self.query = query
         self.sort = sort
-        self.flex_rows = flex_rows
 
         # We keep a queue of rows we haven't yet consumed for
         # materialization. We preserve the original total number of
@@ -816,10 +835,6 @@ class Results(Generic[AnyModel]):
         a `Results` object a second time should be much faster than the
         first.
         """
-
-        # Index flexible attributes by the item ID, so we have easier access
-        flex_attrs = self._get_indexed_flex_attrs()
-
         index = 0  # Position in the materialized objects.
         while index < len(self._objects) or self._rows:
             # Are there previously-materialized objects to produce?
@@ -832,7 +847,7 @@ class Results(Generic[AnyModel]):
             else:
                 while self._rows:
                     row = self._rows.pop(0)
-                    obj = self._make_model(row, flex_attrs.get(row["id"], {}))
+                    obj = self._make_model(row)
                     # If there is a slow-query predicate, ensurer that the
                     # object passes it.
                     if not self.query or self.query.match(obj):
@@ -854,21 +869,10 @@ class Results(Generic[AnyModel]):
             # Objects are pre-sorted (i.e., by the database).
             return self._get_objects()
 
-    def _get_indexed_flex_attrs(self) -> Mapping:
-        """Index flexible attributes by the entity id they belong to"""
-        flex_values: Dict[int, Dict[str, Any]] = {}
-        for row in self.flex_rows:
-            if row["entity_id"] not in flex_values:
-                flex_values[row["entity_id"]] = {}
-
-            flex_values[row["entity_id"]][row["key"]] = row["value"]
-
-        return flex_values
-
-    def _make_model(self, row, flex_values: Dict = {}) -> AnyModel:
+    def _make_model(self, row) -> AnyModel:
         """Create a Model object for the given row"""
-        cols = dict(row)
-        values = {k: v for (k, v) in cols.items() if not k[:4] == "flex"}
+        values = dict(row)
+        flex_values = values.pop("flex_attrs") or {}
 
         # Construct the Python object
         obj = self.model_class._awaken(self.db, values, flex_values)
@@ -1097,6 +1101,8 @@ class Database:
             # We have our own same-thread checks in _connection(), but need to
             # call conn.close() in _close()
             check_same_thread=False,
+            # enable type name "col [type]" conversion (`register_converter`)
+            detect_types=sqlite3.PARSE_COLNAMES,
         )
         self.add_functions(conn)
 
@@ -1254,17 +1260,13 @@ class Database:
         where, subvals = query.clause()
         order_by = sort.order_clause()
 
-        table = model_cls._table
-        _from = table
+        _from = model_cls.table_with_flex_attrs
         required_fields = query.field_names
         if required_fields - model_cls._fields.keys():
             _from += f" {model_cls.relation_join}"
 
+        table = model_cls._table
         sql = f"SELECT {table}.* FROM {_from} WHERE {where or 1} GROUP BY {table}.id"
-        # Fetch flexible attributes for items matching the main query.
-        # Doing the per-item filtering in python is faster than issuing
-        # one query per item to sqlite.
-        flex_sql = f"SELECT * FROM {model_cls._flex_table} WHERE entity_id IN (SELECT id FROM ({sql}))"
 
         if order_by:
             # the sort field may exist in both 'items' and 'albums' tables
@@ -1276,13 +1278,11 @@ class Database:
 
         with self.transaction() as tx:
             rows = tx.query(sql, subvals)
-            flex_rows = tx.query(flex_sql, subvals)
 
         return Results(
             model_cls,
             rows,
             self,
-            flex_rows,
             None if where else query,  # Slow query component.
             sort if sort.is_slow() else None,  # Slow sort component.
         )
