@@ -440,7 +440,7 @@ def syspath(path: AnyStr, prefix: bool = True) -> AnyStr:
     if os.path.__name__ != "ntpath":
         return path
 
-    if isinstance(path, bytes):
+    if not isinstance(path, str):
         # Beets currently represents Windows paths internally with UTF-8
         # arbitrarily. But earlier versions used MBCS because it is
         # reported as the FS encoding by Windows. Try both.
