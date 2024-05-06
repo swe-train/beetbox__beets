@@ -35,8 +35,8 @@ from typing import (
     Any,
     AnyStr,
     Callable,
-    Generator,
     Iterable,
+    Iterator,
     List,
     MutableSequence,
     Optional,
@@ -45,6 +45,7 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
+    cast,
 )
 
 from typing_extensions import TypeAlias
@@ -193,7 +194,7 @@ def sorted_walk(
     ignore: Sequence[BytesOrStr] = (),
     ignore_hidden: bool = False,
     logger: Optional[Logger] = None,
-) -> Generator[Tuple[bytes, Sequence[bytes], Sequence[bytes]], None, None]:
+) -> Iterator[Tuple[bytes, Sequence[bytes], Sequence[bytes]]]:
     """Like `os.walk`, but yields things in case-insensitive sorted,
     breadth-first order.  Directory and file names matching any glob
     pattern in `ignore` are skipped. If `logger` is provided, then
@@ -224,7 +225,7 @@ def sorted_walk(
         for pat in bytes_ignore:
             if fnmatch.fnmatch(base, pat):
                 if logger:
-                    logger.error(
+                    logger.debug(
                         "ignoring '{}' due to ignore rule '{}'", base, pat
                     )
                 skip = True
@@ -462,7 +463,7 @@ def syspath(path: AnyStr, prefix: bool = True) -> AnyStr:
             str_path = "UNC" + str_path[1:]
         str_path = WINDOWS_MAGIC_PREFIX + str_path
 
-    return str_path if isinstance(path, str) else str_path.encode()
+    return cast(AnyStr, str_path)
 
 
 def samefile(p1: AnyStr, p2: AnyStr) -> bool:
@@ -479,10 +480,10 @@ def remove(path: AnyStr, soft: bool = True):
     """Remove the file. If `soft`, then no error will be raised if the
     file does not exist.
     """
+    path = syspath(path)
     if not path or (soft and not os.path.exists(path)):
         return
 
-    path = syspath(path)
     try:
         os.remove(path)
     except OSError as exc:
@@ -538,8 +539,13 @@ def move(path: bytes, dest: bytes, replace: bool = False):
             delete=False,
         )
         try:
-            with open(syspath(path)) as f:
-                shutil.copyfileobj(f, tmp)
+            with open(syspath(path), "rb") as f:
+                # mypy bug:
+                # - https://github.com/python/mypy/issues/15031
+                # - https://github.com/python/mypy/issues/14943
+                # Fix not yet released:
+                # - https://github.com/python/mypy/pull/14975
+                shutil.copyfileobj(f, tmp)  # type: ignore[misc]
         finally:
             tmp.close()
 
@@ -1102,7 +1108,7 @@ def asciify_path(path: str, sep_replace: str) -> str:
     return os.sep.join(path_components)
 
 
-def par_map(transform: Callable[..., Any], items: Iterable[Any]) -> None:
+def par_map(transform: Callable[[T], Any], items: Iterable[T]) -> None:
     """Apply the function `transform` to all the elements in the
     iterable `items`, like `map(transform, items)` but with no return
     value.

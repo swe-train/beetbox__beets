@@ -327,7 +327,7 @@ def item_file(item_id):
 
     try:
         # Imitate http.server behaviour
-        base_filename.decode().encode("latin-1", "strict")
+        base_filename.encode("latin-1", "strict")
     except UnicodeError:
         safe_filename = unidecode(base_filename)
     else:
