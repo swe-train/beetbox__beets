@@ -463,7 +463,7 @@ def syspath(path: AnyStr, prefix: bool = True) -> AnyStr:
             str_path = "UNC" + str_path[1:]
         str_path = WINDOWS_MAGIC_PREFIX + str_path
 
-    return cast(AnyStr, str_path)
+    return str_path if isinstance(path, str) else str_path.encode()
 
 
 def samefile(p1: AnyStr, p2: AnyStr) -> bool:
